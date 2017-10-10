@@ -19,19 +19,13 @@ Hardware: ESP-12E + DHT22
 #define DHTPIN 5
 #define DHTTYPE DHT22
 
-// ON/OFF BUTTON
+// Pin for switching things ON and OFF
 #define SWITCHPIN 9
+
+DHT dht(DHTPIN, DHTTYPE);
 
 WiFiClientSecure espClient;
 
-//MQTT
-#ifdef MQTT
-PubSubClient client(espClient);
-void connect2MQTT();
-void publishData();
-#endif
-
-//Telegram
 #ifdef TELEGRAM
 //WiFiClientSecure BOTclient;
 UniversalTelegramBot bot(BOTtoken, espClient);
@@ -39,12 +33,6 @@ int Bot_mtbs = 1000; //mean time between scan messages
 long Bot_lasttime;   //last time messages' scan has been done
 void handleNewMessages(int numNewMessages);
 #endif
-
-//void digitalClockDisplay();
-//void printDigits(int digits);
-
-void updateLCD();
-void readDHTAndPublishData();
 
 #ifdef NTP
 WiFiUDP ntpUDP;
@@ -77,22 +65,8 @@ void check4CEST(time_t t){
 }
 #endif
 
-DHT dht(DHTPIN, DHTTYPE);
-
-ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
-
-// global variables
-uint16_t timer_val = 0;
-uint8_t seconds;
-uint8_t last_second = 99;
-uint16_t last_minute = 99;
-uint8_t i = 0;
-uint16_t t3,t4;
-float vcc, hum, temp;
-bool stateOfSwitch, lastStateOfSwitch = 99;
-
-
 #ifdef MQTT
+PubSubClient client(espClient);
 void connect2MQTT(){
   const char* host = MQTT_SERVER;
   Serial.print("Connecting to ");
@@ -223,7 +197,24 @@ void connect2MQTTBroker(){
 }
 #endif
 
-void readDHTAndPublishData() {
+void updateLCD();
+void readDHTAndPublishData();
+
+ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
+
+// global variables
+uint16_t timer_val = 0;
+uint8_t seconds;
+uint8_t last_second = 99;
+uint16_t last_minute = 99;
+uint8_t i = 0;
+uint16_t t3,t4;
+float vcc, hum, temp;
+bool stateOfSwitch, lastStateOfSwitch = 99;
+
+
+
+void readDHTAndVcc() {
   // Wait at least 2 seconds seconds between measurements.
   // Reading temperature for humidity takes about 250 milliseconds!
   hum = dht.readHumidity();          // Read humidity (percent)
@@ -231,17 +222,13 @@ void readDHTAndPublishData() {
   // Check if any reads failed and exit early (to try again).
   if (isnan(hum) || isnan(temp))
   {
-    Serial.println("Failed to read from DHT sensor!");
+    Serial.println(F("Failed to read from DHT sensor!"));
     return;
   }
   // Read vcc
-  vcc = ESP.getVcc();
-  vcc = vcc / 1000;
-  // publish data to MQTT broker
-  #ifdef MQTT
-  publishData();
-  #endif
+  vcc = ESP.getVcc()/1000;
 }
+
 
 //function to prepend string with a zero if it's only single digit
 String m2D(int s){
@@ -518,14 +505,8 @@ void setup() {
 }
 
 void loop() {
-
   yield();
-
-  if (WiFi.status() == 6)
-   {
-     ESP.reset();
-   }
-
+  if (WiFi.status() == 6) {ESP.reset();}
   //sync output pin every second
   if(secondGone()){
     updateSwitch();
@@ -542,15 +523,17 @@ void loop() {
   }
   //read DHT and vcc and publish to MQTT feeds every 10 s
   if(seconds >= 10){
-    readDHTAndPublishData();
+    readDHTAndVcc();
+    // publish data to MQTT broker
+    #ifdef MQTT
+    publishData();
+    #endif
     seconds = 0;
   }
   //update timer value and switch state every minute
   if (minuteGone()){
     decrementTimerValueAndUpdateSwitchState();
-    //Serial.println("*");
     #ifdef MQTT
-    //publish status
     publishStatus();
     #endif
     Serial.println(timeClient.getFormattedTime());
