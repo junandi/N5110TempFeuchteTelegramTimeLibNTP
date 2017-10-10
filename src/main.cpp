@@ -1,26 +1,8 @@
 /******************************************************************************
-Sauna Remote Control using PubSubClient MQTT library and Adafruit MQTT broker
+ESP node with MQTT and Telegram bot based interaction
 
-Author: Andreas Jung
-Stand:  08.11.2016
-
-using PubSubClient library version
 
 Features: + Temperature and Humidity monitoring via MQTT
-          + Integrated Timer for Sauna
-          + NTP synchronisation for Time
-          + Over The Air Update
-
-
-Hardware: ESP-01 + DHT22
-
-Function:
-Setup: establishing Wifi and verification of safe communication
-Loop: + Establishing secure MQTT connection
-      + Subscribe to Timer feed -> getting message if timer value is set
-      + Measuring Temperature and Humidity every new minute
-      + Publishing Data via MQTT
-      + Updating Switch according to Timer value
 
 Libraries: + Adafruit DHT and Unified Sensor
            + TimeLib
