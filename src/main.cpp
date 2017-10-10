@@ -3,11 +3,12 @@ ESP node with MQTT and Telegram bot based interaction
 
 
 Features: + Temperature and Humidity monitoring via MQTT
+          + Nokia 5110 display for local monitoring
+          + Integrated Timer
+          + NTP function with support for CEST
 
-Libraries: + Adafruit DHT and Unified Sensor
-           + TimeLib
-           + PubSubClient
 
+Hardware: ESP-12E + DHT22
 ******************************************************************************/
 
 #include "DebugUtils.h"
