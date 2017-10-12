@@ -10,9 +10,8 @@ Features: + Temperature and Humidity monitoring via MQTT
 
 Hardware: ESP-12E + DHT22
 ******************************************************************************/
-
-#include "DebugUtils.h"
 #include "libs.h"
+#include "DebugUtils.h"
 #include "credentials.h"
 
 // DHT SETTINGS
@@ -21,6 +20,20 @@ Hardware: ESP-12E + DHT22
 
 // Pin for switching things ON and OFF
 #define SWITCHPIN 9
+
+// global variables
+uint16_t timer_val = 0;
+uint8_t seconds;
+uint8_t last_second = 99;
+uint16_t last_minute = 99;
+uint8_t i = 0;
+String chat_id;
+//uint16_t t3,t4;
+uint8_t minutesUntilItIsTime = 0;
+float vcc, hum, temp;
+bool stateOfSwitch, lastStateOfSwitch = 99;
+
+ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
 
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -43,8 +56,8 @@ NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
 time_t ntpSyncProvider() {
   return timeClient.getEpochTime();
 }
-// vereinfachte Umsetzung der DST (Umstellung jeweils um 0:00 Uhr)
-bool IsDst(time_t t){
+// vereinfachte Umsetzung der CEST (Umstellung jeweils um 0:00 Uhr)
+bool IsCEST(time_t t){
   int m = month(t);
   if (m < 3 || m > 10)  return false;
   if (m > 3 && m < 10)  return true;
@@ -54,13 +67,13 @@ bool IsDst(time_t t){
   return false; // this line should never gonna happen
 }
 void check4CEST(time_t t){
-  if(IsDst(t)){
+  if(IsCEST(t)){
     timeClient.setTimeOffset(7200);
-    Serial.println("DST is on!");
+    //Serial.println(F("CEST is on!"));
   }
   else{
     timeClient.setTimeOffset(3600);
-    Serial.println("DST is off!");
+    //Serial.println(F("CEST is off!"));
   }
 }
 #endif
@@ -69,82 +82,77 @@ void check4CEST(time_t t){
 PubSubClient client(espClient);
 void connect2MQTT(){
   const char* host = MQTT_SERVER;
-  Serial.print("Connecting to ");
-  Serial.println(host);
+  Serial.print(F("Connecting to "));
+  Serial.print(host);
   if (! espClient.connect(host, MQTT_PORT)) {
-    Serial.println("Connection failed. Halting execution.");
+    Serial.print(F("Connection failed. Halting execution."));
     while(1);
   }
   if (espClient.verify(fingerprint, host)) {
-    Serial.println("Connection secure.");
+    Serial.print(F("Connection secure."));
   } else {
-    Serial.println("Connection insecure! Halting execution.");
+    Serial.println(F("Connection insecure! Halting execution."));
     while(1);
   }
 }
 void publishData(){
   String buff;
   char valStr[5];
-  Serial.println(F("Sending:"));
+  Serial.print("Sending:");
   // Publish temperature
   Serial.print("Tmp.: ");
   Serial.print(temp);
-  Serial.print(" ...");
   buff =  (String)temp;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_TEMP, valStr))
   {
-    Serial.println(F("Failed"));
+    Serial.print("Failed");
   }
-  else{Serial.println(F("OK!"));}
-
+  else{Serial.print("OK!");}
   // Publish humidity
   Serial.print("Hum.: ");
   Serial.print(hum);
-  Serial.print(" ...");
   buff =  (String)hum;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_HUM, valStr))
   {
-    Serial.println(F("Failed"));
+    Serial.print("Failed");
   }
-  else{Serial.println(F("OK!"));}
-
+  else{Serial.print("OK!");}
   // Publish voltage
   Serial.print("VCC: ");
   Serial.print(vcc);
-  Serial.print(" ...");
   buff =  (String)vcc;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_VCC, valStr))
   {
-    Serial.println(F("Failed"));
+    Serial.print("Failed");
   }
-  else{Serial.println(F("OK!"));}
-  Serial.println(F(""));
+  else{Serial.print("OK!");}
+  Serial.print("");
 }
 void publishStatus(){
+  String buff;
+  char valStr[5];
   Serial.print("Status: ");
   Serial.print(stateOfSwitch ? "ON" : "OFF");
-  Serial.print(" ...");
-  buff =  (String)(stateOfSwitch ? "ON" : "OFF") ;
+  buff = (String)(stateOfSwitch ? "ON" : "OFF") ;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_STATE, valStr))
   {
-    Serial.println(F("Failed"));
+    Serial.print("Failed");
   }
-  else{Serial.println(F("OK!"));}
+  else{Serial.print("OK!");}
   //publish timer value
   Serial.print("Timer: ");
   Serial.print(timer_val);
-  Serial.print(" ...");
   buff = (String)timer_val;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_TIMER, valStr))
   {
-    Serial.println(F("Failed"));
+    Serial.print("Failed");
   }
-  else{Serial.println(F("OK!"));}
+  else{Serial.print("OK!");}
 
 }
 void callback(char* topic, byte* payload, unsigned int length){
@@ -154,20 +162,20 @@ void callback(char* topic, byte* payload, unsigned int length){
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
-  Serial.println("");
+  Serial.print("");
   */
   //Serial.print("length: ");
-  //Serial.println(length);
+  //Serial.print(length);
 
   //converting value to
   int val = 0;
   for (int i=0; i<length; i++){
     val = val*10 + (payload[i])-48;
-    //Serial.println(val);
+    //Serial.print(val);
   }
   //val = atoi((char*)payload);
 
-  Serial.println(val);
+  Serial.print(val);
 
   if (val == 0){stateOfSwitch = 0;}
   else if (val > 0){stateOfSwitch = 1;}
@@ -178,18 +186,18 @@ void callback(char* topic, byte* payload, unsigned int length){
 void connect2MQTTBroker(){
   // Loop until we're reconnected
   if (!client.connected()) {
-    Serial.print(F("\n."));
+    Serial.print("\n.");
     // Attempt to connect
     if (client.connect("", USER, PASS, USER PREAMBLE F_CON, 1, 1, "OFFLINE")) {
-      Serial.println(F("!"));
+      Serial.print("!");
       // Once connected, publish an announcement...
       client.publish(USER PREAMBLE F_CON,"ONLINE");
       // ... and resubscribe
       client.subscribe(USER PREAMBLE F_TIMER,1);
     } else {
-      Serial.print("failed, rc=");
+      Serial.print(F("failed, rc="));
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
+      Serial.print(F(" try again in 5 seconds"));
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -198,21 +206,6 @@ void connect2MQTTBroker(){
 #endif
 
 void updateLCD();
-void readDHTAndPublishData();
-
-ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
-
-// global variables
-uint16_t timer_val = 0;
-uint8_t seconds;
-uint8_t last_second = 99;
-uint16_t last_minute = 99;
-uint8_t i = 0;
-uint16_t t3,t4;
-float vcc, hum, temp;
-bool stateOfSwitch, lastStateOfSwitch = 99;
-
-
 
 void readDHTAndVcc() {
   // Wait at least 2 seconds seconds between measurements.
@@ -222,13 +215,12 @@ void readDHTAndVcc() {
   // Check if any reads failed and exit early (to try again).
   if (isnan(hum) || isnan(temp))
   {
-    Serial.println(F("Failed to read from DHT sensor!"));
+    Serial.print("Failed to read from DHT sensor!");
     return;
   }
   // Read vcc
   vcc = ESP.getVcc()/1000;
 }
-
 
 //function to prepend string with a zero if it's only single digit
 String m2D(int s){
@@ -292,33 +284,31 @@ void updateLCD(){
 }
 
 void setup_wifi(){
-  //delay(100);
-  #ifdef DEBUG
-  Serial.println(); Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(SSID);
-  #endif
-
+  // Set WiFi to station mode and disconnect from an AP if it was Previously
+  // connected
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  // Attempt to connect to Wifi network:
+  Serial.print(F("Connecting Wifi: "));
+  Serial.println(SSID);
   WiFi.begin(SSID, PASSWORD);
+  // Restart if connection not possible
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Connection Failed! Rebooting...");
-    delay(5000);
+    Serial.println(F("Connection Failed! Rebooting..."));
+    delay(8000);
     ESP.restart();
   }
-  Serial.println();
-  Serial.println("IP address: ");
+  Serial.println(F("IP address: "));
   Serial.println(WiFi.localIP());
 }
 
 #ifdef TELEGRAM
 void handleNewMessages(int numNewMessages) {
-  #ifdef DEBUG
-  Serial.println(F("handleNewMessages"));
-  Serial.println(String(numNewMessages));
-  #endif
+  //Serial.println(F("No. Messages: "));
+  //Serial.print(String(numNewMessages));
   for (int i=0; i<numNewMessages; i++) {
-    String chat_id = String(bot.messages[i].chat_id);
+    chat_id = String(bot.messages[i].chat_id);
     String text = bot.messages[i].text;
     String from_name = bot.messages[i].from_name;
     String senderID = bot.messages[i].from_id;
@@ -387,21 +377,21 @@ void setupOTA(){
       type = "filesystem";
 
     // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-    Serial.println("Start updating " + type);
+    Serial.print("Start updating " + type);
   });
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
+    Serial.print("\nEnd");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    if (error == OTA_AUTH_ERROR) Serial.print("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.print("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.print("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.print("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.print("End Failed");
   });
   ArduinoOTA.begin();
 }
@@ -452,9 +442,9 @@ void updateSwitch(){
 
     if(!client.publish(USER PREAMBLE F_TEMP, valStr))
     {
-      Serial.println(F("Failed"));
+      Serial.print("Failed");
     } else {
-      Serial.println(F("OK!"));
+      Serial.print("OK!");
     }
     #endif
 
@@ -471,7 +461,31 @@ void decrementTimerValueAndUpdateSwitchState(){
   else if (timer_val <= 0){
     stateOfSwitch = 0;
   }
+}
 
+bool itIsTimetoPush(){
+  minutesUntilItIsTime --;
+  if (minutesUntilItIsTime <= 0) {
+    return true;
+    minutesUntilItIsTime = 5;
+  }
+  else {
+    return false;
+  }
+}
+
+void PushToAdminViaTelegramIfHot(){
+  if (temp > 25) {
+    if (itIsTimetoPush()){
+      String message = "Sauna hat ";
+      message.concat(temp);
+      message.concat(" °C");
+      if(bot.sendMessage(chat_id, message, "Markdown")){
+        Serial.print(F("notification successfully sent"));
+      }
+    }
+  }
+  else minutesUntilItIsTime = 0;
 }
 
 void setup() {
@@ -481,10 +495,9 @@ void setup() {
   delay(2000);
 
   Serial.begin(115200);
-  Serial.println("Booting");
-
+  Serial.println(F("Booting..."));
   Serial.printf("Flash size: %d Bytes \n", ESP.getFlashChipRealSize());
-
+  yield();
   setup_wifi();
 
   #ifdef MQTT
@@ -514,7 +527,7 @@ void loop() {
     #ifdef TELEGRAM
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
     while(numNewMessages) {
-      Serial.println(F("Nachricht erhalten!"));
+      //Serial.println(F("Nachricht erhalten!"));
       handleNewMessages(numNewMessages);
       numNewMessages = bot.getUpdates(bot.last_message_received + 1);
     }
@@ -533,10 +546,11 @@ void loop() {
   //update timer value and switch state every minute
   if (minuteGone()){
     decrementTimerValueAndUpdateSwitchState();
+    PushToAdminViaTelegramIfHot();
     #ifdef MQTT
     publishStatus();
     #endif
-    Serial.println(timeClient.getFormattedTime());
+    //Serial.println(timeClient.getFormattedTime());
     check4CEST(now());
   }
 
