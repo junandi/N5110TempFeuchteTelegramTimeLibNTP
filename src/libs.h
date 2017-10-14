@@ -6,6 +6,7 @@
 //#define MQTT
 #define TELEGRAM
 #define NTP
+#define WIFIMANAGER
 //#define OTA
 
 #include <ESP8266WiFi.h>
@@ -14,6 +15,12 @@
 #ifdef NTP
 #include <WiFiUdp.h>
 #include <NTPClient.h>
+#endif
+
+#ifdef WIFIMANAGER
+#include <WiFiManager.h>
+#include <ESP8266WebServer.h>
+#include <EEPROM.h>
 #endif
 
 #ifdef OTA

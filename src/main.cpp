@@ -32,6 +32,11 @@ String chat_id;
 uint8_t minutesUntilItIsTime = 0;
 float vcc, hum, temp;
 bool stateOfSwitch, lastStateOfSwitch = 99;
+#ifdef TELEGRAM
+bool expectingTemp = false;
+bool alarmActive = true;
+uint8_t alarmTemp = 60;
+#endif
 
 ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
 
@@ -41,7 +46,8 @@ WiFiClientSecure espClient;
 
 #ifdef TELEGRAM
 //WiFiClientSecure BOTclient;
-UniversalTelegramBot bot(BOTtoken, espClient);
+//UniversalTelegramBot bot(botToken, espClient);
+UniversalTelegramBot *bot;
 int Bot_mtbs = 1000; //mean time between scan messages
 long Bot_lasttime;   //last time messages' scan has been done
 void handleNewMessages(int numNewMessages);
@@ -205,6 +211,48 @@ void connect2MQTTBroker(){
 }
 #endif
 
+
+#ifdef WIFIMANAGER//flag for saving data
+bool shouldSaveConfig = false;
+//callback notifying us of the need to save config
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+void readBotTokenFromEeprom(int offset){
+  for(int i = offset; i<BOT_TOKEN_LENGTH; i++ ){
+    botToken[i] = EEPROM.read(i);
+  }
+  EEPROM.commit();
+}
+void writeBotTokenToEeprom(int offset){
+  for(int i = offset; i<BOT_TOKEN_LENGTH; i++ ){
+    EEPROM.write(i, botToken[i]);
+  }
+  EEPROM.commit();
+}
+#else
+void setup_wifi(){
+  // Set WiFi to station mode and disconnect from an AP if it was Previously
+  // connected
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  // Attempt to connect to Wifi network:
+  Serial.print(F("Connecting Wifi: "));
+  Serial.println(SSID);
+  WiFi.begin(SSID, PASSWORD);
+  // Restart if connection not possible
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println(F("Connection Failed! Rebooting..."));
+    delay(8000);
+    ESP.restart();
+  }
+  Serial.println(F("IP address: "));
+  Serial.println(WiFi.localIP());
+}
+#endif
+
 void updateLCD();
 
 void readDHTAndVcc() {
@@ -228,6 +276,14 @@ String m2D(int s){
   if (s < 10){sReturn = ("0"+String(s));}
   else {sReturn = String(s);}
   return sReturn;
+}
+
+//Function to check whether given String is a valid number
+bool isValidNumber(String str){
+   for(byte i=0;i<str.length();i++){
+     if(isDigit(str.charAt(i))) return true;
+   }
+   return false;
 }
 
 //Function to update Nokia LCD
@@ -283,85 +339,88 @@ void updateLCD(){
 
 }
 
-void setup_wifi(){
-  // Set WiFi to station mode and disconnect from an AP if it was Previously
-  // connected
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-  // Attempt to connect to Wifi network:
-  Serial.print(F("Connecting Wifi: "));
-  Serial.println(SSID);
-  WiFi.begin(SSID, PASSWORD);
-  // Restart if connection not possible
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println(F("Connection Failed! Rebooting..."));
-    delay(8000);
-    ESP.restart();
-  }
-  Serial.println(F("IP address: "));
-  Serial.println(WiFi.localIP());
-}
-
 #ifdef TELEGRAM
 void handleNewMessages(int numNewMessages) {
   //Serial.println(F("No. Messages: "));
   //Serial.print(String(numNewMessages));
   for (int i=0; i<numNewMessages; i++) {
-    chat_id = String(bot.messages[i].chat_id);
-    String text = bot.messages[i].text;
-    String from_name = bot.messages[i].from_name;
-    String senderID = bot.messages[i].from_id;
+    chat_id = String(bot->messages[i].chat_id);
+    String text = bot->messages[i].text;
+    String from_name = bot->messages[i].from_name;
+    String senderID = bot->messages[i].from_id;
     //if (from_name == "") from_name = "Guest";
-
     if (senderID == adminID) {
       Serial.println(text);
-      if (text == "/start") {
+      if (expectingTemp){
+        if(isValidNumber(text) && 25 < text.toInt() < 90 ){
+          alarmTemp = text.toInt();
+          alarmActive = true;
+          bot->sendMessage(chat_id, "Benachrichtigung bei " + text + " °C", "");
+          expectingTemp = false;
+        }
+        else{
+          bot->sendMessage(chat_id, F("Das ist keine gültige Temperatur!"), "");
+          expectingTemp = false;
+        }
+      }
+      else if (text == "/start") {
         String welcome = "Hi " + from_name + ",\n";
-        welcome += "Wie kann ich helfen?\n\n";
-        welcome += "/on : zum Einschalten\n";
-        welcome += "/off : zum Ausschalten\n";
-        welcome += "/status : Anzeige des akt. Status\n";
-        welcome += "/options : zeigt alle Optionen\n";
-        bot.sendMessage(chat_id, welcome, "Markdown");
+        welcome += F("Wie kann ich helfen?\n\n");
+        welcome += F("/on : Einschalten\n");
+        welcome += F("/off : Ausschalten\n");
+        welcome += F("/status : Anzeige des akt. Status\n");
+        welcome += F("/alarm on: Benachrichtigung bei Erreichen der Soll-Temperatur\n");
+        welcome += F("/alarm off: Benachrichtigungen deaktivieren\n");
+        welcome += F("/options : zeigt alle Optionen\n");
+        bot->sendMessage(chat_id, welcome, "Markdown");
       }
       else if (text == "/options") {
-        String keyboardJson = "[[\"/on\", \"/off\"],[\"/status\"]]";
-        bot.sendMessageWithReplyKeyboard(chat_id, "Wähle eine der folgenden Optionen:", "", keyboardJson, true);
+        String keyboardJson = F("[[\"/on\", \"/off\"],[\"/status\"],[\"/alarm on\", \"/alarm off\"]]");
+        bot->sendMessageWithReplyKeyboard(chat_id, F("Wähle eine der folgenden Optionen:"), "", keyboardJson, true);
       }
       else if (text == "/on") {
         digitalWrite(SWITCHPIN, HIGH);   // turn the LED on (HIGH is the voltage level)
         stateOfSwitch = 1;
         timer_val = 30;
-        bot.sendMessage(chat_id, "ist AN", "");
+        bot->sendMessage(chat_id, "ist AN", "");
       }
       else if (text == "/off") {
-        stateOfSwitch = 0;
         digitalWrite(SWITCHPIN, LOW);    // turn the LED off (LOW is the voltage level)
-        bot.sendMessage(chat_id, "ist AUS", "");
+        stateOfSwitch = 0;
+        bot->sendMessage(chat_id, "ist AUS", "");
       }
       else if (text == "/status") {
         String buff;
         buff = (String)temp;
-        bot.sendMessage(chat_id, "Temperatur: " + buff + " °C","");
+        bot->sendMessage(chat_id, "Temperatur: " + buff + " °C","");
         buff = (String)hum;
-        bot.sendMessage(chat_id, "Feuchte: " + buff + " % r.F.","");
+        bot->sendMessage(chat_id, "Feuchte: " + buff + " % r.F.","");
         buff = (String)timer_val;
-        bot.sendMessage(chat_id, "Timer: " + buff + " min","");
+        bot->sendMessage(chat_id, "Timer: " + buff + " min","");
         if(stateOfSwitch){
-          bot.sendMessage(chat_id, "ist AN", "");
+          bot->sendMessage(chat_id, "ist AN", "");
         } else {
-          bot.sendMessage(chat_id, "ist AUS", "");
+          bot->sendMessage(chat_id, "ist AUS", "");
         }
+        buff = (String)ESP.getFreeHeap();
+        bot->sendMessage(chat_id, "Heap frei: " + buff,"");
+      }
+      else if (text == "/alarm on") {
+        expectingTemp = true;
+        bot->sendMessage(chat_id, F("OK, bei welcher Temperatur / °C ??"), "");
+      }
+      else if (text == "/alarm off") {
+        alarmActive = false;
+        bot->sendMessage(chat_id, F("Benachrichtigungsfunktion deaktiviert!"), "");
       }
       else {
-        bot.sendMessage(chat_id, "?!?: " + text, "");
-        //bot.sendPhoto(chat_id, "https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg", from_name + ", please leave me alone");
+        bot->sendMessage(chat_id, "?!?: " + text, "");
+        bot->sendPhoto(chat_id, "https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg", from_name + "Please leave me alone...");
       }
     }
     else {
-      //bot.sendPhoto(chat_id, "CAADAgADSiYAAktqAwABBe5Xc6njuu8C", from_name + ", please leave me alone");
-      bot.sendMessage(chat_id, "Zugriff verweigert. Deine ID: " + senderID, "");
+//    bot->sendPhoto(chat_id, "https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg", from_name + "Please leave me alone...");
+      bot->sendMessage(chat_id, "Zugriff verweigert. Deine ID: " + senderID, "");
     }
   }
 }
@@ -398,7 +457,6 @@ void setupOTA(){
 #endif
 
 //function to detect change of minute, if so, return 1
-//
 bool minuteGone(){
   //check if minute changed
   uint16_t act_minute = minute();
@@ -463,42 +521,70 @@ void decrementTimerValueAndUpdateSwitchState(){
   }
 }
 
-bool itIsTimetoPush(){
-  minutesUntilItIsTime --;
-  if (minutesUntilItIsTime <= 0) {
-    return true;
-    minutesUntilItIsTime = 5;
-  }
-  else {
-    return false;
-  }
-}
+// bool itIsTimetoPush(){
+//   if (minutesUntilItIsTime <= 0) {
+//     return true;
+//     minutesUntilItIsTime = 5;
+//   }
+//   else {
+//     minutesUntilItIsTime --;
+//     return false;
+//   }
+// }
 
 void PushToAdminViaTelegramIfHot(){
-  if (temp > 25) {
-    if (itIsTimetoPush()){
-      String message = "Sauna hat ";
+  if (temp > alarmTemp) {
+  //  if (itIsTimetoPush()){
+      String message = F("Sauna hat ");
       message.concat(temp);
       message.concat(" °C");
-      if(bot.sendMessage(chat_id, message, "Markdown")){
-        Serial.print(F("notification successfully sent"));
+      if(bot->sendMessage(chat_id, message, "Markdown")){
+        Serial.print(F("Benachrichtigung gesendet!"));
       }
-    }
+   // }
   }
-  else minutesUntilItIsTime = 0;
+  //else minutesUntilItIsTime = 0;
 }
 
 void setup() {
   pinMode(SWITCHPIN, OUTPUT);
+
   LCDInit(); //Init the LCD
   LCDClear();
   delay(2000);
 
-  Serial.begin(115200);
   Serial.println(F("Booting..."));
   Serial.printf("Flash size: %d Bytes \n", ESP.getFlashChipRealSize());
-  yield();
+
+  Serial.begin(115200);
+
+  #ifdef WIFIMANAGER
+  EEPROM.begin(BOT_TOKEN_LENGTH);
+  Serial.println("read bot token");
+  readBotTokenFromEeprom(0);
+  Serial.println(botToken);
+
+  WiFiManager wifiManager;
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+  //Adding an additional config on the WIFI manager webpage for the bot token
+  WiFiManagerParameter custom_bot_id("botid", "Bot Token", botToken, 50);
+  wifiManager.addParameter(&custom_bot_id);
+  //If it fails to connect it will create a TELEGRAM-BOT access point
+  wifiManager.autoConnect("TELEGRAM-BOT");
+  strcpy(botToken, custom_bot_id.getValue());
+  if (shouldSaveConfig) {
+    writeBotTokenToEeprom(0);
+  }
+  bot = new UniversalTelegramBot(FPSTR(botToken), espClient);
+  Serial.println("");
+  Serial.println("WiFi connected!");
+  Serial.println("IP address: ");
+  IPAddress ip = WiFi.localIP();
+  Serial.println(ip);
+  #else
   setup_wifi();
+  #endif
+
 
   #ifdef MQTT
   connect2MQTT();
@@ -525,11 +611,11 @@ void loop() {
     updateSwitch();
     updateLCD();
     #ifdef TELEGRAM
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    int numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     while(numNewMessages) {
       //Serial.println(F("Nachricht erhalten!"));
       handleNewMessages(numNewMessages);
-      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+      numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     }
     #endif
     seconds++;
