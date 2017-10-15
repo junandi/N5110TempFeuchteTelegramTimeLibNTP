@@ -263,13 +263,13 @@ void updateLCD();
 
 void readDHTAndVcc() {
   // Wait at least 2 seconds seconds between measurements.
-  // Reading temperature for humidity takes about 250 milliseconds!
-  hum = dht.readHumidity();          // Read humidity (percent)
+  // Reading temperature and humidity takes about 250 milliseconds!
+  hum = dht.readHumidity();         // Read humidity (percent)
   temp = dht.readTemperature();     // Read temperature in Degrees Celsius
   // Check if any reads failed and exit early (to try again).
   if (isnan(hum) || isnan(temp))
   {
-    Serial.print("Failed to read from DHT sensor!");
+    Serial.print(F("Failed to read from DHT sensor!"));
     return;
   }
   // Read vcc
@@ -305,7 +305,6 @@ void updateLCD(){
   String sBuff = (m2D(hour(tm))+":"+m2D(minute(tm))+":"+m2D(second(tm)));
   sBuff.toCharArray(buf, len);
   LCDString(buf);
-
   // go to second row
   gotoXY(0, 1);
   // print Date on second row
@@ -323,26 +322,23 @@ void updateLCD(){
   gotoXY(0, 3);
   // print humidity
   String h = String(hum);
-  sBuff = (h +" % r.F. "+ h); //why the second "h"??? -> probably not right
+  sBuff = (h +" % r.F.");
   sBuff.toCharArray(buf, len);
   LCDString(buf);
   // go to 5th row
   gotoXY(0, 4);
   // print timer value and status
   t = String(timer_val);
-  // set String h to either "ON" or "OFF" depending on stateOfSwitch
-  h = (stateOfSwitch ? "ON" : "OFF");
-  sBuff = (t +" min - "+ h);
+  // set h to "AN" or "AUS" depending on stateOfSwitch
+  h = (stateOfSwitch ? FPSTR(an) : FPSTR(aus);
+  sBuff = (t + " min - " + h);
   sBuff.toCharArray(buf, len);
   LCDString(buf);
-
   gotoXY(0, 5);
-  // print timer value and status
+  // print free heap size
   t = String(ESP.getFreeHeap());
-  // set String h to either "ON" or "OFF" depending on stateOfSwitch
   t.toCharArray(buf, len);
   LCDString(buf);
-
 }
 
 
@@ -362,7 +358,7 @@ void handleNewMessages(int numNewMessages) {
         if(isValidNumber(text) && (text.toInt() >= 25) && (text.toInt() <= 90)){
           alarmTemp = text.toInt();
           alarmActive = true;
-          bot->sendMessage(chat_id, "Benachrichtigung bei " + text + " °C", "");
+          bot->sendMessage(chat_id, F("Benachrichtigung bei ") + text + " °C", "");
           expectingTemp = false;
         }
         else{
@@ -383,7 +379,7 @@ void handleNewMessages(int numNewMessages) {
       }
       else if (text == "/options") {
         String keyboardJson = F("[[\"/on\", \"/off\"],[\"/status\"],[\"/notify\", \"/silence\"]]");
-        bot->sendMessageWithReplyKeyboard(chat_id, F("Wähle eine der folgenden Optionen:"), "", keyboardJson, true);
+        bot->sendMessageWithReplyKeyboard(chat_id, (PGM_P)(F("Wähle eine der folgenden Optionen:")), "", keyboardJson, true);
       }
       else if (text == "/on") {
         digitalWrite(SWITCHPIN, HIGH);   // turn the LED on (HIGH is the voltage level)
@@ -415,7 +411,7 @@ void handleNewMessages(int numNewMessages) {
         }
         else {bot->sendMessage(chat_id, (PGM_P)(F("Benachrichtigung deaktiviert!")),"");}
         buff = (String)ESP.getFreeHeap();
-        bot->sendMessage(chat_id, "Heap frei: " + buff,"");
+        bot->sendMessage(chat_id, F("Heap frei: ") + buff,"");
       }
       else if (text == "/notify") {
         expectingTemp = true;
@@ -427,12 +423,12 @@ void handleNewMessages(int numNewMessages) {
       }
       else {
         bot->sendMessage(chat_id, "?!?: " + text, "");
-        bot->sendPhoto(chat_id, "https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg", "...feels bad man...");
+        bot->sendPhoto(chat_id, F("https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg"), F("...feels bad man..."));
       }
     }
     else {
       //bot->sendPhoto(chat_id, "https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg", from_name + "Please leave me alone...");
-      bot->sendMessage(chat_id, "Zugriff verweigert. Deine ID: " + senderID, "");
+      bot->sendMessage(chat_id, F("Zugriff verweigert. Deine ID: ") + senderID, "");
     }
   }
 }
@@ -495,11 +491,11 @@ bool secondGone(){
 void updateSwitch(){
   if (stateOfSwitch != lastStateOfSwitch){
     if (stateOfSwitch == 0){
-      Serial.println(F("Sw. OFF"));
+      Serial.println(FPSTR(aus));
       digitalWrite(SWITCHPIN, LOW);
     }
     else if (stateOfSwitch == 1){
-      Serial.println(F("Sw. ON"));
+      Serial.println(FPSTR(an));
       digitalWrite(SWITCHPIN, HIGH);
     }
     lastStateOfSwitch = stateOfSwitch;
@@ -517,7 +513,6 @@ void updateSwitch(){
       Serial.print("OK!");
     }
     #endif
-
   }
 }
 
