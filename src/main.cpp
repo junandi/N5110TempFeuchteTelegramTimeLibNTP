@@ -32,6 +32,7 @@ String chat_id;
 uint8_t minutesUntilItIsTime = 0;
 float vcc, hum, temp;
 bool stateOfSwitch, lastStateOfSwitch = 99;
+
 #ifdef TELEGRAM
 bool expectingTemp = false;
 bool alarmActive = true;
@@ -213,7 +214,6 @@ void connect2MQTTBroker(){
 }
 #endif
 
-
 #ifdef WIFIMANAGER
 //flag for saving data
 bool shouldSaveConfig = false;
@@ -258,8 +258,6 @@ void setup_wifi(){
   Serial.println(WiFi.localIP());
 }
 #endif
-
-void updateLCD();
 
 void readDHTAndVcc() {
   // Wait at least 2 seconds seconds between measurements.
@@ -376,8 +374,8 @@ void handleNewMessages(int numNewMessages) {
         welcome += F("/on : Einschalten\n");
         welcome += F("/off : Ausschalten\n");
         welcome += F("/status : Anzeige des akt. Status\n");
-        welcome += F("/notify: Benachrichtigung bei Erreichen der Soll-Temperatur\n");
-        welcome += F("/silence: Benachrichtigung deaktivieren\n");
+        welcome += F("/notify: Benachrichtigung bei bestimmter Temperatur\n");
+        welcome += F("/silence: Benachrichtigungen deaktivieren\n");
         welcome += F("/options : alle Optionen\n");
         bot->sendMessage(chat_id, welcome, "Markdown");
       }
@@ -411,7 +409,7 @@ void handleNewMessages(int numNewMessages) {
           bot->sendMessage(chat_id, FPSTR(aus), "");
         }
         if (alarmActive){
-          bot->sendMessage(chat_id, (PGM_P)(F("Nachricht bei ")) + String(temp) + " °C","");
+          bot->sendMessage(chat_id, (PGM_P)(F("Nachricht bei ")) + String(alarmTemp) + " °C","");
         }
         else {bot->sendMessage(chat_id, (PGM_P)(F("Benachrichtigung deaktiviert!")),"");}
         buff = (String)ESP.getFreeHeap();
@@ -419,7 +417,7 @@ void handleNewMessages(int numNewMessages) {
       }
       else if (text == "/notify") {
         expectingTemp = true;
-        bot->sendMessage(chat_id, F("OK, bei welcher Temperatur / °C ??"), "");
+        bot->sendMessage(chat_id, F("OK, bei welcher Temperatur?"), "");
       }
       else if (text == "/silence") {
         alarmActive = false;
@@ -495,11 +493,11 @@ bool secondGone(){
 void updateSwitch(){
   if (stateOfSwitch != lastStateOfSwitch){
     if (stateOfSwitch == 0){
-      Serial.println(F("Sw. OFF"));
+      Serial.println(FPSTR(aus));
       digitalWrite(SWITCHPIN, LOW);
     }
     else if (stateOfSwitch == 1){
-      Serial.println(F("Sw. ON"));
+      Serial.println(FPSTR(an));
       digitalWrite(SWITCHPIN, HIGH);
     }
     lastStateOfSwitch = stateOfSwitch;
@@ -507,9 +505,8 @@ void updateSwitch(){
     #ifdef MQTT
     String buff;
     char valStr[5];
-    buff = stateOfSwitch ? "ON" : "OFF";
+    buff = stateOfSwitch ? FPSTR(an) : FPSTR(aus);
     buff.toCharArray(valStr,5);
-
     if(!client.publish(USER PREAMBLE F_TEMP, valStr))
     {
       Serial.print("Failed");
@@ -518,6 +515,10 @@ void updateSwitch(){
     }
     #endif
 
+    #ifdef TELEGRAM
+    String buff = (stateOfSwitch ? FPSTR(an) : FPSTR(aus));
+    bot->sendMessage(chat_id, buff,"");
+    #endif
   }
 }
 
