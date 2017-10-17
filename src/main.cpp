@@ -29,7 +29,7 @@ uint16_t last_minute = 99;
 uint8_t i = 0;
 String chat_id;
 //uint16_t t3,t4;
-uint8_t minutesUntilItIsTime = 0;
+//uint8_t minutesUntilItIsTime = 0;
 float vcc, hum, temp;
 bool stateOfSwitch, lastStateOfSwitch = 99;
 
@@ -39,6 +39,8 @@ bool alarmActive = true;
 uint8_t alarmTemp = 60;
 const char an[] PROGMEM = "AN";
 const char aus[] PROGMEM = "AUS";
+const char fail[] PROGMEM = "Fehler!";
+const char ok[] PROGMEM = "OK!";
 #endif
 
 ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
@@ -107,6 +109,7 @@ void connect2MQTT(){
 void publishData(){
   String buff;
   char valStr[5];
+  uint8_t errorcode = 0;
   Serial.print("Sending:");
   // Publish temperature
   Serial.print("Tmp.: ");
@@ -115,9 +118,8 @@ void publishData(){
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_TEMP, valStr))
   {
-    Serial.print("Failed");
+    errorcode = errorcode | 1;
   }
-  else{Serial.print("OK!");}
   // Publish humidity
   Serial.print("Hum.: ");
   Serial.print(hum);
@@ -125,9 +127,8 @@ void publishData(){
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_HUM, valStr))
   {
-    Serial.print("Failed");
+    errorcode = errorcode | 1 << 1;
   }
-  else{Serial.print("OK!");}
   // Publish voltage
   Serial.print("VCC: ");
   Serial.print(vcc);
@@ -135,23 +136,21 @@ void publishData(){
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_VCC, valStr))
   {
-    Serial.print("Failed");
   }
-  else{Serial.print("OK!");}
-  Serial.print("");
+  if (errorcode){Serial.print(errorcode,BIN);}else{Serial.print(FPSTR(ok));}
 }
+
 void publishStatus(){
   String buff;
   char valStr[5];
   Serial.print("Status: ");
-  Serial.print(stateOfSwitch ? "ON" : "OFF");
-  buff = (String)(stateOfSwitch ? "ON" : "OFF") ;
+  Serial.print(stateOfSwitch ? FPSTR(AN) : FPSTR(AUS));
+  buff = (String)(stateOfSwitch ? FPSTR(AN) : FPSTR(AUS)) ;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_STATE, valStr))
   {
-    Serial.print("Failed");
+    Serial.print(FPSTR(fail));
   }
-  else{Serial.print("OK!");}
   //publish timer value
   Serial.print("Timer: ");
   Serial.print(timer_val);
@@ -159,9 +158,9 @@ void publishStatus(){
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_TIMER, valStr))
   {
-    Serial.print("Failed");
+    Serial.print(FPSTR(fail));
   }
-  else{Serial.print("OK!");}
+  else{Serial.print(FPSTR(ok));}
 
 }
 void callback(char* topic, byte* payload, unsigned int length){
@@ -328,7 +327,6 @@ void updateLCD(){
   // print timer value and status
   t = String(timer_val);
   // set h to "AN" or "AUS" depending on stateOfSwitch
-  h = (stateOfSwitch ? FPSTR(an) : FPSTR(aus);
   sBuff = (t + " min - " + h);
   sBuff.toCharArray(buf, len);
   LCDString(buf);
@@ -338,7 +336,6 @@ void updateLCD(){
   t.toCharArray(buf, len);
   LCDString(buf);
 }
-
 
 #ifdef TELEGRAM
 void handleNewMessages(int numNewMessages) {
@@ -356,7 +353,7 @@ void handleNewMessages(int numNewMessages) {
         if(isValidNumber(text) && (text.toInt() >= 25) && (text.toInt() <= 90)){
           alarmTemp = text.toInt();
           alarmActive = true;
-          bot->sendMessage(chat_id, F("Benachrichtigung bei ") + text + " °C", "");
+          bot->sendMessage(chat_id, (PGM_P)F("Benachrichtigung bei ") + text + " °C", "");
           expectingTemp = false;
         }
         else{
@@ -409,7 +406,7 @@ void handleNewMessages(int numNewMessages) {
         }
         else {bot->sendMessage(chat_id, (PGM_P)(F("Benachrichtigung deaktiviert!")),"");}
         buff = (String)ESP.getFreeHeap();
-        bot->sendMessage(chat_id, F("Heap frei: ") + buff,"");
+        bot->sendMessage(chat_id, (PGM_P)F("Heap frei: ") + buff,"");
       }
       else if (text == "/notify") {
         expectingTemp = true;
@@ -426,7 +423,7 @@ void handleNewMessages(int numNewMessages) {
     }
     else {
       //bot->sendPhoto(chat_id, "https://ih1.redbubble.net/image.31887377.4850/fc,550x550,white.jpg", from_name + "Please leave me alone...");
-      bot->sendMessage(chat_id, F("Zugriff verweigert. Deine ID: ") + senderID, "");
+      bot->sendMessage(chat_id, (PGM_P)F("Zugriff verweigert. Deine ID: ") + senderID, "");
     }
   }
 }
@@ -505,12 +502,12 @@ void updateSwitch(){
     buff.toCharArray(valStr,5);
     if(!client.publish(USER PREAMBLE F_TEMP, valStr))
     {
-      Serial.print("Failed");
+      Serial.print(FPSTR(fail));
     } else {
-      Serial.print("OK!");
+      Serial.print(FPSTR(ok));
     }
     #endif
-    
+
     #ifdef TELEGRAM
     String buff = (stateOfSwitch ? FPSTR(an) : FPSTR(aus));
     bot->sendMessage(chat_id, buff,"");
@@ -557,22 +554,19 @@ void PushToAdminViaTelegramIfHot(){
 
 void setup() {
   pinMode(SWITCHPIN, OUTPUT);
+  Serial.begin(115200);
 
   LCDInit(); //Init the LCD
   LCDClear();
-  delay(2000);
+  delay(500);
 
   Serial.println(F("Booting..."));
   Serial.printf("Flash size: %d Bytes \n", ESP.getFlashChipRealSize());
 
-  Serial.begin(115200);
-
   #ifdef WIFIMANAGER
-  EEPROM.begin(BOT_TOKEN_LENGTH);
-
+  //EEPROM.begin(BOT_TOKEN_LENGTH);
   //Serial.println("read bot token");
   //readBotTokenFromEeprom(0);
-
   WiFiManager wifiManager;
   wifiManager.setSaveConfigCallback(saveConfigCallback);
   //Adding an additional config on the WIFI manager webpage for the bot token
@@ -597,7 +591,6 @@ void setup() {
   #else
   setup_wifi();
   #endif
-
 
   #ifdef MQTT
   connect2MQTT();
