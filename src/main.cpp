@@ -575,14 +575,6 @@ void setup() {
     ESP.reset();
     delay(5000);
 }
-  //print out received
-  //strcpy(destination, source)
-  // strcpy(botToken, custom_bot_id.getValue());
-  // if (shouldSaveConfig) {
-  //   if (custom_bot_id.getValue() != 0){
-  //     writeBotTokenToEeprom(0);
-  //   }
-  // }
 
   Serial.print(F("WiFi connected - IP address: "));
   IPAddress ip = WiFi.localIP();
