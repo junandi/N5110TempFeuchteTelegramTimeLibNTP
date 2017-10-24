@@ -31,7 +31,7 @@ String chat_id;
 //uint16_t t3,t4;
 //uint8_t minutesUntilItIsTime = 0;
 float vcc, hum, temp;
-bool stateOfSwitch, lastStateOfSwitch = 99;
+bool newStateOfSwitch, stateOfSwitch = 99;
 
 #ifdef TELEGRAM
 bool expectingTemp = false;
@@ -53,8 +53,6 @@ WiFiClientSecure espClient;
 //WiFiClientSecure BOTclient;
 //UniversalTelegramBot bot(botToken, espClient);
 UniversalTelegramBot *bot;
-int Bot_mtbs = 1000; //mean time between scan messages
-long Bot_lasttime;   //last time messages' scan has been done
 void handleNewMessages(int numNewMessages);
 #endif
 
@@ -91,6 +89,7 @@ void check4CEST(time_t t){
 
 #ifdef MQTT
 PubSubClient client(espClient);
+
 void connect2MQTT(){
   const char* host = MQTT_SERVER;
   Serial.print(F("Connecting to "));
@@ -106,6 +105,7 @@ void connect2MQTT(){
     while(1);
   }
 }
+
 void publishData(){
   String buff;
   char valStr[5];
@@ -136,16 +136,16 @@ void publishData(){
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_VCC, valStr))
   {
+    errorcode = errorcode | 1 << 2;
   }
   if (errorcode){Serial.print(errorcode,BIN);}else{Serial.print(FPSTR(ok));}
 }
 
 void publishStatus(){
-  String buff;
   char valStr[5];
   Serial.print("Status: ");
   Serial.print(stateOfSwitch ? FPSTR(AN) : FPSTR(AUS));
-  buff = (String)(stateOfSwitch ? FPSTR(AN) : FPSTR(AUS)) ;
+  String buff = (String)(stateOfSwitch ? FPSTR(AN) : FPSTR(AUS)) ;
   buff.toCharArray(valStr,5);
   if(!client.publish(USER PREAMBLE F_STATE, valStr))
   {
@@ -161,8 +161,8 @@ void publishStatus(){
     Serial.print(FPSTR(fail));
   }
   else{Serial.print(FPSTR(ok));}
-
 }
+
 void callback(char* topic, byte* payload, unsigned int length){
 
   Serial.print("-> ");
@@ -185,12 +185,12 @@ void callback(char* topic, byte* payload, unsigned int length){
 
   Serial.print(val);
 
-  if (val == 0){stateOfSwitch = 0;}
-  else if (val > 0){stateOfSwitch = 1;}
-  else{stateOfSwitch = 0;}
+  if (val == 0){newStateOfSwitch = 0;}
+  else if (val > 0){newStateOfSwitch = 1;}
+  else{newStateOfSwitch = 0;}
   timer_val = val;
-
 }
+
 void connect2MQTTBroker(){
   // Loop until we're reconnected
   if (!client.connected()) {
@@ -327,6 +327,7 @@ void updateLCD(){
   // print timer value and status
   t = String(timer_val);
   // set h to "AN" or "AUS" depending on stateOfSwitch
+  h = stateOfSwitch ? FPSTR(an) : FPSTR(aus);
   sBuff = (t + " min - " + h);
   sBuff.toCharArray(buf, len);
   LCDString(buf);
@@ -377,14 +378,12 @@ void handleNewMessages(int numNewMessages) {
         bot->sendMessageWithReplyKeyboard(chat_id, (PGM_P)(F("Wähle eine der folgenden Optionen:")), "", keyboardJson, true);
       }
       else if (text == "/on") {
-        digitalWrite(SWITCHPIN, HIGH);   // turn the LED on (HIGH is the voltage level)
-        stateOfSwitch = 1;
+        newStateOfSwitch = 1;
         timer_val = 30;
         bot->sendMessage(chat_id, FPSTR(an), "");
       }
       else if (text == "/off") {
-        digitalWrite(SWITCHPIN, LOW);    // turn the LED off (LOW is the voltage level)
-        stateOfSwitch = 0;
+        newStateOfSwitch = 0;
         timer_val = 0;
         bot->sendMessage(chat_id, FPSTR(aus), "");
       }
@@ -462,10 +461,9 @@ void setupOTA(){
 //function to detect change of minute, if so, return 1
 bool minuteGone(){
   //check if minute changed
-  uint16_t act_minute = minute();
+  uint8_t act_minute = minute();
   if (act_minute != last_minute){
     last_minute = act_minute;
-    //return 1
     return 1;
   }
   //if minute isn't gone yet, return 0
@@ -483,29 +481,20 @@ bool secondGone(){
 }
 
 //function to set output pin according to stateOfSwitch
-void updateSwitch(){
-  if (stateOfSwitch != lastStateOfSwitch){
-    if (stateOfSwitch == 0){
+void updateSwitchAndPublishIfChanged(){
+  if (newStateOfSwitch != stateOfSwitch){
+    if (newStateOfSwitch == 0){
       Serial.println(FPSTR(aus));
       digitalWrite(SWITCHPIN, LOW);
     }
-    else if (stateOfSwitch == 1){
+    else if (newStateOfSwitch == 1){
       Serial.println(FPSTR(an));
       digitalWrite(SWITCHPIN, HIGH);
     }
-    lastStateOfSwitch = stateOfSwitch;
+    stateOfSwitch = newStateOfSwitch;
 
     #ifdef MQTT
-    String buff;
-    char valStr[5];
-    buff = stateOfSwitch ? FPSTR(an) : FPSTR(aus);
-    buff.toCharArray(valStr,5);
-    if(!client.publish(USER PREAMBLE F_TEMP, valStr))
-    {
-      Serial.print(FPSTR(fail));
-    } else {
-      Serial.print(FPSTR(ok));
-    }
+    publishStatus();
     #endif
 
     #ifdef TELEGRAM
@@ -515,15 +504,15 @@ void updateSwitch(){
   }
 }
 
-void decrementTimerValueAndUpdateSwitchState(){
+void updateTimerValueAndSwitchState(){
   //if timer =! 0, decrease timer value and set stateOfSwitch to 1 (=On)
   if (timer_val >= 1){
     timer_val--;
-    stateOfSwitch = 1;
+    newStateOfSwitch = 1;
   }
   //if timer = 0, set stateOfswitch to 0 (=Off)
   else if (timer_val <= 0){
-    stateOfSwitch = 0;
+    newStateOfSwitch = 0;
   }
 }
 
@@ -538,7 +527,7 @@ void decrementTimerValueAndUpdateSwitchState(){
 //   }
 // }
 
-void PushToAdminViaTelegramIfHot(){
+void PushViaTelegramIfHot(){
   if (temp > alarmTemp) {
   //  if (itIsTimetoPush()){
       String message = F("Sauna hat ");
@@ -554,7 +543,7 @@ void PushToAdminViaTelegramIfHot(){
 
 void setup() {
   pinMode(SWITCHPIN, OUTPUT);
-  Serial.begin(115200);
+  Serial.begin(74880);
 
   LCDInit(); //Init the LCD
   LCDClear();
@@ -572,8 +561,20 @@ void setup() {
   //Adding an additional config on the WIFI manager webpage for the bot token
   // WiFiManagerParameter custom_bot_id("botid", "Bot Token", botToken, 50);
   // wifiManager.addParameter(&custom_bot_id);
-  //If it fails to connect it will create a TELEGRAM-BOT access point
-  wifiManager.autoConnect("TELEGRAM-BOT");
+  //If it fails to connect it will create a access point
+  wifiManager.setTimeout(300);
+
+  //fetches ssid and pass and tries to connect
+  //if it does not connect it starts an access point with the specified name
+  //here  "AutoConnectAP"
+  //and goes into a blocking loop awaiting configuration
+  if(!wifiManager.autoConnect()) {
+    Serial.println(F("failed to connect and hit timeout..."));
+    delay(3000);
+    //reset and try again, or maybe put it to deep sleep
+    ESP.reset();
+    delay(5000);
+}
   //print out received
   //strcpy(destination, source)
   // strcpy(botToken, custom_bot_id.getValue());
@@ -582,14 +583,16 @@ void setup() {
   //     writeBotTokenToEeprom(0);
   //   }
   // }
-  bot = new UniversalTelegramBot(botToken, espClient);
-  Serial.println("");
-  Serial.println("WiFi connected!");
-  Serial.println("IP address: ");
+
+  Serial.print(F("WiFi connected - IP address: "));
   IPAddress ip = WiFi.localIP();
   Serial.println(ip);
   #else
   setup_wifi();
+  #endif
+
+  #ifdef TELEGRAM
+  bot = new UniversalTelegramBot(botToken, espClient);
   #endif
 
   #ifdef MQTT
@@ -614,7 +617,7 @@ void loop() {
   if (WiFi.status() == 6) {ESP.reset();}
   //sync output pin every second
   if(secondGone()){
-    updateSwitch();
+    updateSwitchAndPublishIfChanged();
     updateLCD();
     #ifdef TELEGRAM
     int numNewMessages = bot->getUpdates(bot->last_message_received + 1);
@@ -637,8 +640,8 @@ void loop() {
   }
   //update timer value and switch state every minute
   if (minuteGone()){
-    decrementTimerValueAndUpdateSwitchState();
-    PushToAdminViaTelegramIfHot();
+    updateTimerValueAndSwitchState();
+    PushViaTelegramIfHot();
     #ifdef MQTT
     publishStatus();
     #endif

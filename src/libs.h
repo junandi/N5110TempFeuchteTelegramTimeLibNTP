@@ -40,7 +40,9 @@
 #include <ArduinoJson.h>
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
-#include <PubSubClient.h>
 
+#ifdef MQTT
+#include <PubSubClient.h>
+#endif
 
 #endif
