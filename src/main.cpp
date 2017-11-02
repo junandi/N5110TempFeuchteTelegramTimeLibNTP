@@ -14,9 +14,31 @@ Hardware: ESP-12E + DHT22
 #include "DebugUtils.h"
 #include "credentials.h"
 
+#ifdef DHT
 // DHT SETTINGS
 #define DHTPIN 5
 #define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+void readDHT() {
+  // Wait at least 2 seconds seconds between measurements.
+  // Reading temperature and humidity takes about 250 milliseconds!
+  hum = dht.readHumidity();         // Read humidity (percent)
+  temp = dht.readTemperature();     // Read temperature in Degrees Celsius
+  // Check if any reads failed and exit early (to try again).
+  if (isnan(hum) || isnan(temp))
+  {
+    Serial.print(F("Failed to read from DHT sensor!"));
+    return;
+  }
+}
+#endif
+
+// Read vcc
+float readVccCalibrated(){
+  float vcc = ESP.getVcc();
+  vcc = vcc / 969;
+  return vcc;
+}
 
 // Pin for switching things ON and OFF
 #define SWITCHPIN 15
@@ -30,10 +52,11 @@ uint8_t i = 0;
 String chat_id;
 //uint16_t t3,t4;
 //uint8_t minutesUntilItIsTime = 0;
-float vcc, hum, temp;
+float hum, temp;
 bool newStateOfSwitch, stateOfSwitch = 99;
 
 #ifdef TELEGRAM
+WiFiClientSecure espClient;
 bool expectingTemp = false;
 bool alarmActive = true;
 uint8_t alarmTemp = 60;
@@ -41,20 +64,13 @@ const char an[] PROGMEM = "AN";
 const char aus[] PROGMEM = "AUS";
 const char fail[] PROGMEM = "Fehler!";
 const char ok[] PROGMEM = "OK!";
-#endif
-
-ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
-
-DHT dht(DHTPIN, DHTTYPE);
-
-WiFiClientSecure espClient;
-
-#ifdef TELEGRAM
 //WiFiClientSecure BOTclient;
 //UniversalTelegramBot bot(botToken, espClient);
 UniversalTelegramBot *bot;
 void handleNewMessages(int numNewMessages);
 #endif
+
+ADC_MODE(ADC_VCC); // to be able to use ESP.getVcc()
 
 #ifdef NTP
 WiFiUDP ntpUDP;
@@ -87,9 +103,173 @@ void check4CEST(time_t t){
 }
 #endif
 
+#ifdef ASYNCMQTT
+AsyncMqttClient mqttClient;
+Ticker mqttReconnectTimer;
+WiFiEventHandler wifiConnectHandler;
+WiFiEventHandler wifiDisconnectHandler;
+Ticker wifiReconnectTimer;
+
+void publishTempHumVccToMQTT(){
+  char cBuff[6] = {0};
+  uint8_t errorcode = 0;
+  Serial.print(F("Sending..."));
+
+  // Publish temperature
+  Serial.print(" Tmp.: ");
+  Serial.print(temp);
+  dtostrf(temp,5,1,cBuff);
+
+  if(!mqttClient.publish(USER PREAMBLE F_TEMP, 1, true, cBuff))
+  {
+    errorcode = errorcode | 1;
+  }
+  // Publish humidity
+  Serial.print(" Hum.: ");
+  Serial.print(hum);
+  dtostrf(hum,5,1,cBuff);
+  if(!mqttClient.publish(USER PREAMBLE F_HUM, 1, true, cBuff))
+  {
+    errorcode = errorcode | 1 << 1;
+  }
+  // Publish voltage
+  Serial.print(" VCC: ");
+  Serial.println(readVccCalibrated());
+  dtostrf(readVccCalibrated(),5,1,cBuff);
+  if(!mqttClient.publish(USER PREAMBLE F_VCC, 1, true, cBuff))
+  {
+    errorcode = errorcode | 1 << 2;
+  }
+  if (errorcode){Serial.print(errorcode,BIN);}else{Serial.print(FPSTR(ok));}
+}
+void publishTimerAndStateToMQTT(){
+  char cBuff[5] = {0};
+  Serial.print("Status: ");
+  Serial.print(stateOfSwitch ? FPSTR(an) : FPSTR(aus));
+
+  String buff = (stateOfSwitch ? FPSTR(an) : FPSTR(aus));
+  buff.toCharArray(cBuff,4);
+  if(!mqttClient.publish(USER PREAMBLE F_STATE, 1, true, cBuff))
+  {
+    Serial.println(FPSTR(fail));
+  }
+  //publish timer value
+  Serial.print(" - Timer: ");
+  Serial.println(timer_val);
+  itoa(timer_val,cBuff,10);
+  //dtostrf(timer_val,3,0,cBuff);
+  Serial.println(cBuff);
+  if(!mqttClient.publish(USER PREAMBLE F_TIMER, 1, true, cBuff))
+  {
+    Serial.println(FPSTR(fail));
+  }
+  else{Serial.println(FPSTR(ok));}
+}
+void handleMqttMessage(char* topic, char* payload, size_t len){
+  if (strcmp(topic,USER PREAMBLE F_TIMER) == 0){
+    uint8_t val = atoi((char*)payload);
+    Serial.print(F("MQTT -> "));
+    Serial.println(val);
+    if (val == 0){newStateOfSwitch = 0;}
+    else if (val > 0){newStateOfSwitch = 1;}
+    else{newStateOfSwitch = 0;}
+    timer_val = val;
+  }
+}
+
+void connectToWifi() {
+  //Serial.println("Connecting to Wi-Fi...");
+  //WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+}
+void connectToMqtt() {
+  Serial.println(F("Connecting to MQTT..."));
+  mqttClient.connect();
+}
+void onWifiConnect(const WiFiEventStationModeGotIP& event) {
+  Serial.println(F("Connected to Wi-Fi."));
+  connectToMqtt();
+}
+void onWifiDisconnect(const WiFiEventStationModeDisconnected& event) {
+  Serial.println(F("Disconnected from Wi-Fi."));
+  mqttReconnectTimer.detach(); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi
+  wifiReconnectTimer.once(2, connectToWifi);
+}
+void onMqttConnect(bool sessionPresent) {
+  Serial.println(F("Connected to MQTT."));
+  Serial.print(F("Session present: "));
+  Serial.println(sessionPresent);
+
+  uint16_t packetIdSub = mqttClient.subscribe(USER PREAMBLE F_TIMER, 1);
+  Serial.print(F("Subscribing at QoS 1, packetId: "));
+  Serial.println(packetIdSub);
+
+  /*
+  mqttClient.publish(USER PREAMBLE F_TIMER, 0, true, "1");
+  Serial.println("Publishing at QoS 0");
+
+  uint16_t packetIdPub1 = mqttClient.publish(USER PREAMBLE F_TIMER, 1, true, "2");
+  Serial.print("Publishing at QoS 1, packetId: ");
+  Serial.println(packetIdPub1);
+  */
+
+  uint16_t packetIdPub2 = mqttClient.publish(USER PREAMBLE F_STATE, 1, true, "alive!");
+  //Serial.print("Publishing at QoS 2, packetId: ");
+  //Serial.println(packetIdPub2);
+}
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  Serial.println(F("Disconnected from MQTT."));
+
+  if (reason == AsyncMqttClientDisconnectReason::TLS_BAD_FINGERPRINT) {
+    Serial.println(F("Bad server fingerprint."));
+  }
+
+  if (WiFi.isConnected()) {
+    mqttReconnectTimer.once(2, connectToMqtt);
+  }
+}
+void onMqttSubscribe(uint16_t packetId, uint8_t qos) {
+  Serial.println(F("Subscribe acknowledged."));
+  //Serial.print("  packetId: ");
+  //Serial.println(packetId);
+  //Serial.print("  qos: ");
+  //Serial.println(qos);
+}
+void onMqttUnsubscribe(uint16_t packetId) {
+  Serial.println(F("Unsubscribe acknowledged."));
+  //Serial.print("  packetId: ");
+  //Serial.println(packetId);
+}
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  // Serial.println(F("Publish received."));
+  // Serial.print(F("  topic: "));
+  // Serial.println(topic);
+  // Serial.print(F("  qos: "));
+  // Serial.println(properties.qos);
+  /*
+  Serial.print(F("  dup: "));
+  Serial.println(properties.dup);
+  Serial.print(F("  retain: "));
+  Serial.println(properties.retain);
+  Serial.print(F("  len: "));
+  Serial.println(len);
+  Serial.print(F("  index: "));
+  Serial.println(index);
+  */
+  // Serial.print(F("  total: "));
+  // Serial.println(total);
+  handleMqttMessage(topic,payload,len);
+
+}
+void onMqttPublish(uint16_t packetId) {
+  Serial.println(F("Publish acknowledged."));
+  // Serial.print("  packetId: ");
+  // Serial.println(packetId);
+}
+#endif
+
+
 #ifdef MQTT
 PubSubClient client(espClient);
-
 void connect2MQTT(){
   const char* host = MQTT_SERVER;
   Serial.print(F("Connecting to "));
@@ -105,7 +285,6 @@ void connect2MQTT(){
     while(1);
   }
 }
-
 void publishData(){
   String buff;
   char valStr[5];
@@ -140,7 +319,6 @@ void publishData(){
   }
   if (errorcode){Serial.print(errorcode,BIN);}else{Serial.print(FPSTR(ok));}
 }
-
 void publishStatus(){
   char valStr[5];
   Serial.print("Status: ");
@@ -162,16 +340,15 @@ void publishStatus(){
   }
   else{Serial.print(FPSTR(ok));}
 }
-
 void callback(char* topic, byte* payload, unsigned int length){
 
   Serial.print("-> ");
-  /*
+
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
   Serial.print("");
-  */
+
   //Serial.print("length: ");
   //Serial.print(length);
 
@@ -190,7 +367,6 @@ void callback(char* topic, byte* payload, unsigned int length){
   else{newStateOfSwitch = 0;}
   timer_val = val;
 }
-
 void connect2MQTTBroker(){
   // Loop until we're reconnected
   if (!client.connected()) {
@@ -258,20 +434,6 @@ void setup_wifi(){
 }
 #endif
 
-void readDHTAndVcc() {
-  // Wait at least 2 seconds seconds between measurements.
-  // Reading temperature and humidity takes about 250 milliseconds!
-  hum = dht.readHumidity();         // Read humidity (percent)
-  temp = dht.readTemperature();     // Read temperature in Degrees Celsius
-  // Check if any reads failed and exit early (to try again).
-  if (isnan(hum) || isnan(temp))
-  {
-    Serial.print(F("Failed to read from DHT sensor!"));
-    return;
-  }
-  // Read vcc
-  vcc = ESP.getVcc()/1000;
-}
 
 //function to prepend string with a zero if it's only single digit
 String m2D(int s){
@@ -289,6 +451,7 @@ bool isValidNumber(String str){
    return false;
 }
 
+#ifdef N5110
 //Function to update Nokia LCD
 void updateLCD(){
   time_t tm = now();
@@ -337,6 +500,7 @@ void updateLCD(){
   t.toCharArray(buf, len);
   LCDString(buf);
 }
+#endif
 
 #ifdef TELEGRAM
 void handleNewMessages(int numNewMessages) {
@@ -497,6 +661,10 @@ void updateSwitchAndPublishIfChanged(){
     publishStatus();
     #endif
 
+    #ifdef ASYNCMQTT
+    publishTimerAndStateToMQTT();
+    #endif
+
     #ifdef TELEGRAM
     String buff = (stateOfSwitch ? FPSTR(an) : FPSTR(aus));
     bot->sendMessage(chat_id, buff,"");
@@ -545,12 +713,38 @@ void setup() {
   pinMode(SWITCHPIN, OUTPUT);
   Serial.begin(74880);
 
+  #ifdef N5110
   LCDInit(); //Init the LCD
   LCDClear();
+  #endif
+
   delay(500);
 
   Serial.println(F("Booting..."));
   Serial.printf("Flash size: %d Bytes \n", ESP.getFlashChipRealSize());
+
+  #ifdef ASYNCMQTT
+  wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
+  wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
+
+  mqttClient.onConnect(onMqttConnect);
+  mqttClient.onDisconnect(onMqttDisconnect);
+  mqttClient.onSubscribe(onMqttSubscribe);
+  mqttClient.onUnsubscribe(onMqttUnsubscribe);
+  mqttClient.onMessage(onMqttMessage);
+  mqttClient.onPublish(onMqttPublish);
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCredentials(USER, PASS);
+  mqttClient.setKeepAlive(KEEPALIVE);
+  mqttClient.setWill(LW_TOPIC,LW_QOS,LW_RETAIN,LW_PAYLOAD,LW_LENGTH);
+
+  #if ASYNC_TCP_SSL_ENABLED
+  mqttClient.setSecure(MQTT_SECURE);
+  if (MQTT_SECURE) {
+    mqttClient.addServerFingerprint((const uint8_t[])MQTT_SERVER_FINGERPRINT);
+  }
+  #endif
+  #endif
 
   #ifdef WIFIMANAGER
   //EEPROM.begin(BOT_TOKEN_LENGTH);
@@ -574,7 +768,7 @@ void setup() {
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
     delay(5000);
-}
+  }
 
   Serial.print(F("WiFi connected - IP address: "));
   IPAddress ip = WiFi.localIP();
@@ -610,7 +804,11 @@ void loop() {
   //sync output pin every second
   if(secondGone()){
     updateSwitchAndPublishIfChanged();
+
+    #ifdef N5110
     updateLCD();
+    #endif
+
     #ifdef TELEGRAM
     int numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     while(numNewMessages) {
@@ -621,21 +819,29 @@ void loop() {
     #endif
     seconds++;
   }
+
   //read DHT and vcc and publish to MQTT feeds every 10 s
   if(seconds >= 10){
-    readDHTAndVcc();
-    // publish data to MQTT broker
-    #ifdef MQTT
-    publishData();
+    #ifdef DHT
+    readDHT();
+    #ifdef ASYNCMQTT
+    publishTempHumVccToMQTT();
+    #else
+    Serial.println(readVccCalibrated());
+    #endif
     #endif
     seconds = 0;
   }
+
   //update timer value and switch state every minute
   if (minuteGone()){
     updateTimerValueAndSwitchState();
     PushViaTelegramIfHot();
     #ifdef MQTT
     publishStatus();
+    #endif
+    #ifdef ASYNCMQTT
+    publishTimerAndStateToMQTT();
     #endif
     //Serial.println(timeClient.getFormattedTime());
     check4CEST(now());
